@@ -1,7 +1,7 @@
-const STORAGE_KEY = "todo-list-items";
+const TODOS_TABLE = "todos";
 
 const state = {
-  todos: loadTodos(),
+  todos: [],
   filter: "all",
   sort: "createdAt",
   search: "",
@@ -19,55 +19,87 @@ const filterButtons = document.querySelectorAll(".filter-btn");
 const listEl = document.getElementById("todo-list");
 const emptyState = document.getElementById("empty-state");
 
-function loadTodos() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? JSON.parse(raw) : [];
-  } catch {
+function rowToTodo(row) {
+  return {
+    id: row.id,
+    title: row.title,
+    category: row.category,
+    priority: row.priority,
+    dueDate: row.due_date,
+    completed: row.completed,
+    createdAt: row.created_at,
+  };
+}
+
+async function loadTodos() {
+  const { data, error } = await supabaseClient
+    .from(TODOS_TABLE)
+    .select("*")
+    .order("created_at", { ascending: true });
+  if (error) {
+    console.error("Failed to load todos:", error);
     return [];
   }
+  return data.map(rowToTodo);
 }
 
-function saveTodos() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state.todos));
-}
-
-function uid() {
-  return crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random();
-}
-
-function addTodo({ title, category, priority, dueDate }) {
-  state.todos.push({
-    id: uid(),
-    title: title.trim(),
-    category: category.trim(),
-    priority,
-    dueDate: dueDate || null,
-    completed: false,
-    createdAt: new Date().toISOString(),
-  });
-  saveTodos();
+async function addTodo({ title, category, priority, dueDate }) {
+  const { data, error } = await supabaseClient
+    .from(TODOS_TABLE)
+    .insert({
+      title: title.trim(),
+      category: category.trim(),
+      priority,
+      due_date: dueDate || null,
+      completed: false,
+    })
+    .select()
+    .single();
+  if (error) {
+    console.error("Failed to add todo:", error);
+    return;
+  }
+  state.todos.push(rowToTodo(data));
   render();
 }
 
-function updateTodo(id, changes) {
+async function updateTodo(id, changes) {
+  const payload = {};
+  if ("title" in changes) payload.title = changes.title;
+  if ("category" in changes) payload.category = changes.category;
+  if ("priority" in changes) payload.priority = changes.priority;
+  if ("dueDate" in changes) payload.due_date = changes.dueDate;
+  if ("completed" in changes) payload.completed = changes.completed;
+
+  const { data, error } = await supabaseClient
+    .from(TODOS_TABLE)
+    .update(payload)
+    .eq("id", id)
+    .select()
+    .single();
+  if (error) {
+    console.error("Failed to update todo:", error);
+    return;
+  }
   const todo = state.todos.find((t) => t.id === id);
-  if (todo) Object.assign(todo, changes);
-  saveTodos();
+  if (todo) Object.assign(todo, rowToTodo(data));
   render();
 }
 
-function deleteTodo(id) {
+async function deleteTodo(id) {
+  const { error } = await supabaseClient.from(TODOS_TABLE).delete().eq("id", id);
+  if (error) {
+    console.error("Failed to delete todo:", error);
+    return;
+  }
   state.todos = state.todos.filter((t) => t.id !== id);
-  saveTodos();
   render();
 }
 
-function toggleComplete(id) {
+async function toggleComplete(id) {
   const todo = state.todos.find((t) => t.id === id);
-  if (todo) todo.completed = !todo.completed;
-  saveTodos();
-  render();
+  if (!todo) return;
+  await updateTodo(id, { completed: !todo.completed });
 }
 
 const PRIORITY_ORDER = { high: 0, medium: 1, low: 2 };
@@ -285,4 +317,7 @@ filterButtons.forEach((btn) => {
   });
 });
 
-render();
+(async function init() {
+  state.todos = await loadTodos();
+  render();
+})();
